@@ -1,34 +1,46 @@
 from __future__ import annotations
 
-import base64
 import os
 import sqlite3
-import time
 from pathlib import Path
 from typing import Any
 
 import urllib3
-from fastapi import Body, Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
+from fastapi import Body, Depends, FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
-LEGACY_SECRET = "WORKSHOP_SECRET_2026"
+import jwt
+
+TOKEN_ISSUER = "workshop-auth-backend"
 
 
-def legacy_identity(authorization: str = Header(default="")) -> dict[str, str]:
+def legacy_identity(request: Request, authorization: str = Header(default="")) -> dict[str, str]:
     try:
-        token = authorization.replace("Bearer ", "")
-        decoded = base64.b64decode(token).decode("utf-8")
-        parts = decoded.split("|")
-        if len(parts) != 4 or parts[3] != LEGACY_SECRET or int(parts[2]) < int(time.time()):
-            raise ValueError("invalid token")
-        return {"username": parts[0], "role": parts[1]}
-    except Exception as error:
-        raise HTTPException(status_code=401, detail="Invalid token: " + str(error)) from error
+        if not authorization.startswith("Bearer "):
+            raise jwt.InvalidTokenError("Invalid bearer scheme")
+        token = authorization.removeprefix("Bearer ").strip()
+        payload = jwt.decode(
+            token,
+            request.app.state.token_secret,
+            algorithms=["HS256"],
+            issuer=TOKEN_ISSUER,
+            options={"require": ["exp", "iss", "sub", "role"]},
+        )
+        username = payload.get("sub")
+        role = payload.get("role")
+        if not isinstance(username, str) or not username or not isinstance(role, str) or not role:
+            raise jwt.InvalidTokenError("Invalid identity claims")
+        return {"username": username, "role": role}
+    except jwt.PyJWTError as error:
+        raise HTTPException(status_code=401, detail="Invalid token") from error
 
 
-def create_app(db_path: str | None = None, upload_dir: str | None = None) -> FastAPI:
+def create_app(db_path: str | None = None, upload_dir: str | None = None, token_secret: str | None = None) -> FastAPI:
     selected_db = db_path or os.getenv("WORKSHOP_DB_PATH", "./data/workshop.db")
     selected_uploads = upload_dir or os.getenv("WORKSHOP_UPLOAD_DIR", "./uploads")
+    selected_token_secret = token_secret if token_secret is not None else os.getenv("WORKSHOP_TOKEN_SECRET")
+    if selected_token_secret is None or len(selected_token_secret.encode("utf-8")) < 32:
+        raise RuntimeError("WORKSHOP_TOKEN_SECRET must contain at least 32 bytes")
     Path(selected_db).parent.mkdir(parents=True, exist_ok=True)
     Path(selected_uploads).mkdir(parents=True, exist_ok=True)
 
@@ -45,6 +57,7 @@ def create_app(db_path: str | None = None, upload_dir: str | None = None) -> Fas
     app = FastAPI(title="Workshop Requirements API", version="0.1.0")
     app.state.connection = connection
     app.state.upload_dir = selected_uploads
+    app.state.token_secret = selected_token_secret
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],

@@ -18,6 +18,8 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 
 Swagger: `http://localhost:8000/docs`
 
+La autenticacion requiere `WORKSHOP_TOKEN_SECRET`: configura el mismo valor aleatorio, de al menos 32 bytes, en esta API y en Auth Backend. El token usa HS256 y el emisor `workshop-auth-backend`; no guardes el secreto en el repositorio.
+
 ## Endpoints
 
 - `GET /api/tasks`
